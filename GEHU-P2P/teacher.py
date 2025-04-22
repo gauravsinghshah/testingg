@@ -6,7 +6,7 @@ import os
 from network import PeerNetwork
 
 class TeacherWindow:
-    def __init__(self, root):
+    def _init_(self, root):
         self.root = root
         self.root.title("GEHU P2P - Teacher")
         self.colors = {
@@ -86,7 +86,7 @@ class TeacherWindow:
         self.network.broadcast(f"file:{file_name}:{file_path}")
         messagebox.showinfo("Success", "File sent successfully")
 
-if __name__ == "__main__":
+if _name_ == "_main_":
     root = tk.Tk()
     TeacherWindow(root)
     root.mainloop()
