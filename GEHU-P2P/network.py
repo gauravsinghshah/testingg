@@ -1,121 +1,95 @@
+import socket
 import threading
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-import os
-from pathlib import Path
 import json
-from network import PeerNetwork
+import os
 
-class StudentWindow:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("GEHU P2P - Student")
-        self.colors = {
-            'primary': '#6C63FF',
-            'secondary': '#F0F0F7',
-            'text': '#2D3748',
-            'white': '#FFFFFF'
-        }
+class PeerNetwork:
+    def __init__(self, port=8081, on_file_received=None, on_peer_discovered=None):
+        self.port = port
+        self.host = socket.gethostbyname(socket.gethostname())
+        self.peers = {}
+        self.is_listening = True
 
-        self.network = PeerNetwork(
-            on_file_received=self.handle_file_received,
-            on_peer_discovered=self.handle_peer_discovery
-        )
+        # Callbacks for GUI integration
+        self.on_file_received = on_file_received
+        self.on_peer_discovered = on_peer_discovered
+    
+    def discover_peers(self):
+        """Broadcast presence to local network"""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
-        self.setup_ui()
-        self.start_listening()
-        self.join_session()
+        message = json.dumps({
+            "type": "discover",
+            "host": self.host,
+            "port": self.port
+        })
 
-    def setup_ui(self):
-        self.main_frame = tk.Frame(self.root, bg=self.colors['secondary'], padx=20, pady=20)
-        self.main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Messages frame
-        messages_frame = tk.LabelFrame(self.main_frame, text="Received Messages", 
-                                       font=('Helvetica', 12, 'bold'), bg=self.colors['secondary'])
-        messages_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-
-        self.messages_text = tk.Text(messages_frame)
-        self.messages_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-        # Files frame
-        files_frame = tk.LabelFrame(self.main_frame, text="Shared Files", 
-                                    font=('Helvetica', 12, 'bold'), bg=self.colors['secondary'])
-        files_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-
-        columns = ('Name', 'Size', 'Shared By')
-        self.files_tree = ttk.Treeview(files_frame, columns=columns, show='headings')
-
-        for col in columns:
-            self.files_tree.heading(col, text=col)
-            self.files_tree.column(col, width=100)
-
-        self.files_tree.pack(fill=tk.BOTH, expand=True)
-
-        download_btn = tk.Button(files_frame, text="Download Selected", 
-                                 bg=self.colors['primary'], fg='white',
-                                 command=self.download_file)
-        download_btn.pack(fill=tk.X, padx=5, pady=5)
-
-    def handle_file_received(self, data, addr):
-        """Handle actual file transfer messages."""
         try:
-            message_data = json.loads(data.decode())
-            if message_data.get("type") == "file_transfer":
-                file_name = message_data["file_name"]
-                file_data = bytes.fromhex(message_data["file_data"])  # Convert hex back to bytes
-
-                # Save file
-                save_dir = Path.home() / "Downloads" / "GEHU_P2P_Received"
-                save_dir.mkdir(parents=True, exist_ok=True)
-                file_path = save_dir / file_name
-                with open(file_path, 'wb') as f:
-                    f.write(file_data)
-
-                # Update UI
-                display_msg = f"✅ Received file: {file_name} from {addr[0]}\n"
-                self.root.after(0, self.update_ui, display_msg)
-
-                self.root.after(0, lambda: self.files_tree.insert("", tk.END, values=(
-                    file_name, f"{len(file_data)//1024} KB", addr[0])))
-
+            sock.sendto(message.encode(), ('<broadcast>', self.port))
+            print("📡 Broadcasting presence to local network...")
         except Exception as e:
-            self.root.after(0, self.update_ui, f"❌ Error handling file: {str(e)}\n")
+            error_msg = f"❌ Error broadcasting presence: {str(e)}"
+            print(error_msg)
+            if self.on_file_received:
+                self.on_file_received(error_msg, ('localhost', self.port))
+        finally:
+            sock.close()
 
-    def handle_peer_discovery(self, message, addr):
-        """Handle discovered peers and update the UI."""
-        peer_info = f"🔍 Discovered peer: {addr[0]}\n"
-        self.root.after(0, self.update_ui, peer_info)
 
-    def update_ui(self, msg):
-        self.messages_text.insert(tk.END, msg)
-        self.messages_text.yview(tk.END)
+    def listen_for_peers(self):
+        """Listen for incoming peer broadcasts or file transfers"""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    def download_file(self):
-        selected_item = self.files_tree.selection()
-        if not selected_item:
-            messagebox.showwarning("Warning", "Please select a file to download")
+        try:
+            sock.bind(('', self.port))
+            print(f"Listening for peers on port {self.port}...")
+        except OSError as e:
+            error_msg = f"❌ ERROR: Port {self.port} is already in use. Please close the conflicting process or choose a different port."
+            print(error_msg)
+            if self.on_file_received:
+                self.on_file_received(error_msg, ('localhost', self.port))
             return
 
-        file_name = self.files_tree.item(selected_item)['values'][0]
-        save_path = filedialog.asksaveasfilename(defaultextension=os.path.splitext(file_name)[1],
-                                                 initialfile=file_name)
+        while self.is_listening:
+            try:
+                data, addr = sock.recvfrom(65536)
+                if not data:
+                    continue
 
-        if save_path:
-            # For now, simulate that the file was downloaded.
-            messagebox.showinfo("Success", f"File {file_name} downloaded successfully!")
+                # Check if data is already a string (i.e., no need to decode)
+                message = data.decode() if isinstance(data, bytes) else data
+                print(f"Received data: {message}")
 
-    def start_listening(self):
-        listen_thread = threading.Thread(target=self.network.listen_for_peers)
-        listen_thread.daemon = True
-        listen_thread.start()
+                try:
+                    message_data = json.loads(message)
+                    msg_type = message_data.get("type")
 
-    def join_session(self):
-        self.network.discover_peers()
-        self.root.after(0, lambda: messagebox.showinfo("Success", "Connected to the session"))
+                    if msg_type == "discover":
+                        self.peers[addr[0]] = message_data
+                        print(f"🔍 Discovered peer: {addr[0]}")
+                        if self.on_peer_discovered:
+                            self.on_peer_discovered(message_data, addr)
 
+                    elif msg_type == "file_transfer":
+                        file_name = message_data["file_name"]
+                        file_data = bytes.fromhex(message_data["file_data"])
+                        with open(file_name, 'wb') as f:
+                            f.write(file_data)
+                        print(f"✅ File {file_name} received and saved.")
+                        if self.on_file_received:
+                            self.on_file_received(f"file:{file_name}", addr)
 
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = StudentWindow(root)
-    root.mainloop()
+                except json.JSONDecodeError:
+                    # Handle plain-text fallback (e.g., file:<name>:<path>)
+                    print(f"📦 Received fallback message from {addr}: {message}")
+                    if message.startswith("file:") and self.on_file_received:
+                        self.on_file_received(message, addr)
+
+            except Exception as e:
+                error_msg = f"❌ Error receiving data: {e}"
+                print(error_msg)
+                if self.on_file_received:
+                    self.on_file_received(error_msg, ('localhost', self.port))
+
