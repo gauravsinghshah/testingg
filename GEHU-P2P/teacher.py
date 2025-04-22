@@ -1,4 +1,3 @@
-# File: teacher.py
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -6,7 +5,7 @@ import os
 from network import PeerNetwork
 
 class TeacherWindow:
-    def _init_(self, root):
+    def __init__(self, root):
         self.root = root
         self.root.title("GEHU P2P - Teacher")
         self.colors = {
@@ -81,12 +80,19 @@ class TeacherWindow:
             return
             
         file_name = os.path.basename(file_path)
-        # Implement file chunking and sending logic here
-        # For now, we'll just send the file path as a message
-        self.network.broadcast(f"file:{file_name}:{file_path}")
+        file_size = os.path.getsize(file_path)
+
+        # Open the file and read it in chunks
+        with open(file_path, 'rb') as file:
+            chunk_size = 1024  # 1 KB chunk size
+            file_data = file.read(chunk_size)
+            while file_data:
+                self.network.broadcast(f"file:{file_name}:{file_data.hex()}")
+                file_data = file.read(chunk_size)
+
         messagebox.showinfo("Success", "File sent successfully")
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     root = tk.Tk()
     TeacherWindow(root)
     root.mainloop()
