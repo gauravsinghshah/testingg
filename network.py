@@ -16,7 +16,7 @@ class PeerNetwork:
         self.on_message_received = on_message_received
         self.on_file_ack = on_file_ack
         self.peers = []
-        self.chunk_size = 1024 * 512  # 512 KB chunks
+        self.chunk_size = 1024 * 512
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -27,41 +27,6 @@ class PeerNetwork:
             data = f.read()
         chunks = [data[i:i+self.chunk_size] for i in range(0, len(data), self.chunk_size)]
         return chunks
-    
-    def listen_for_messages(self):
-        print(f" Listening for messages on TCP port {self.message_port}...")
-        msg_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        msg_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        try:
-            msg_socket.bind(('', self.message_port))
-            msg_socket.listen(5)
-
-            while True:
-                try:
-                    conn, addr = msg_socket.accept()
-                    thread = threading.Thread(target=self._handle_message, args=(conn, addr))
-                    thread.daemon = True
-                    thread.start()
-                except Exception as e:
-                    print(f" Error accepting message connection: {e}")
-        except Exception as e:
-            print(f" Error setting up message listener: {e}")
-
-    def _handle_message(self, conn, addr):
-        try:
-            data = conn.recv(4096)
-            if data:
-                message = data.decode('utf-8')
-                print(f" Received message from {addr[0]}: {message}")
-                if self.on_message_received:
-                    self.on_message_received(message, addr)
-        except Exception as e:
-            print(f" Error handling message: {e}")
-        finally:
-            conn.close()
-
-
 
     def send_file_chunks(self, file_path, peer_ip):
         file_name = os.path.basename(file_path)
@@ -85,7 +50,7 @@ class PeerNetwork:
                     s.sendall(header.encode('utf-8') + b'\n')
 
                 print(f" Sent chunk {i+1}/{total_chunks} to {peer_ip}")
-                time.sleep(0.1)  # Brief delay to avoid socket congestion
+                time.sleep(0.1)
 
             except Exception as e:
                 print(f" Error sending chunk {i} to {peer_ip}: {e}")
@@ -104,10 +69,19 @@ class PeerNetwork:
                     break
 
             if not header_data:
+                print(f"⚠️ Empty header received from {addr[0]}")
                 return
+
+            print(f"📦 Raw header data from {addr[0]}: {header_data}")
 
             try:
                 header = json.loads(header_data.decode('utf-8'))
+                required_keys = ['file_name', 'chunk_index', 'total_chunks', 'chunk_data']
+                for key in required_keys:
+                    if key not in header:
+                        print(f"⚠️ Missing key in received chunk header from {addr[0]}: {key}")
+                        return
+
                 file_name = header['file_name']
                 chunk_index = header['chunk_index']
                 total_chunks = header['total_chunks']
@@ -124,11 +98,13 @@ class PeerNetwork:
                     }
                     self.on_file_received(file_chunk_info, addr)
 
+            except json.JSONDecodeError as jde:
+                print(f"❌ JSON decode error from {addr[0]}: {jde}")
             except Exception as e:
-                print(f" Error parsing chunk header: {e}")
+                print(f"❌ Error parsing chunk header from {addr[0]}: {e}")
 
         except Exception as e:
-            print(f" Error receiving chunk: {e}")
+            print(f"❌ Error receiving chunk from {addr[0]}: {e}")
 
         finally:
             conn.close()
