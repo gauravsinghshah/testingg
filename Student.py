@@ -31,7 +31,7 @@ class StudentWindow(QMainWindow):
         self.received_chunks = {}
         self.expected_chunks = {}
         self.received_files = {}
-        self.chunk_registry = {}  # filename -> {chunk_index: [peer_ips]}
+        self.chunk_registry = {}
 
         self.network = PeerNetwork(
             on_file_received=self.handle_file_chunk,
@@ -83,39 +83,44 @@ class StudentWindow(QMainWindow):
 
     def handle_peer_message(self, message, sender_address):
         ip = sender_address[0]
-        if message.startswith("CHUNK_ANNOUNCE"):
-            _, filename, chunk_idx = message.split("|")
-            chunk_idx = int(chunk_idx)
-            self.chunk_registry.setdefault(filename, {}).setdefault(chunk_idx, []).append(ip)
-            self.signal_handler.message_received.emit(f"📣 {ip} has chunk {chunk_idx} of {filename}")
+        try:
+            if message.startswith("CHUNK_ANNOUNCE"):
+                _, filename, chunk_idx = message.split("|")
+                chunk_idx = int(chunk_idx)
+                self.chunk_registry.setdefault(filename, {}).setdefault(chunk_idx, []).append(ip)
+                self.signal_handler.message_received.emit(f"📣 {ip} has chunk {chunk_idx} of {filename}")
 
-        elif message.startswith("REQUEST_CHUNK"):
-            _, filename, chunk_idx = message.split("|")
-            chunk_idx = int(chunk_idx)
-            if filename in self.received_chunks and chunk_idx in self.received_chunks[filename]:
-                chunk_data = base64.b64encode(self.received_chunks[filename][chunk_idx]).decode('utf-8')
-                reply = f"CHUNK_DATA|{filename}|{chunk_idx}|{chunk_data}"
-                self.network.send_message(ip, reply)
+            elif message.startswith("REQUEST_CHUNK"):
+                _, filename, chunk_idx = message.split("|")
+                chunk_idx = int(chunk_idx)
+                if filename in self.received_chunks and chunk_idx in self.received_chunks[filename]:
+                    chunk_data = base64.b64encode(self.received_chunks[filename][chunk_idx]).decode('utf-8')
+                    reply = f"CHUNK_DATA|{filename}|{chunk_idx}|{chunk_data}"
+                    self.network.send_message(ip, reply)
 
-        elif message.startswith("CHUNK_DATA"):
-            _, filename, chunk_idx, chunk_data_b64 = message.split("|", 3)
-            chunk_idx = int(chunk_idx)
-            chunk_data = base64.b64decode(chunk_data_b64)
-
-            if filename not in self.received_chunks:
-                self.received_chunks[filename] = {}
-
-            self.received_chunks[filename][chunk_idx] = chunk_data
-            self.signal_handler.message_received.emit(f"📥 Received missing chunk {chunk_idx} of {filename} from {ip}")
-
-            if filename in self.expected_chunks and len(self.received_chunks[filename]) == self.expected_chunks[filename]:
-                self.assemble_file(filename, ip)
-
-        else:
-            self.signal_handler.message_received.emit(f" Message from {ip}: {message}")
+            elif message.startswith("CHUNK_DATA"):
+                _, filename, chunk_idx, chunk_data_b64 = message.split("|", 3)
+                chunk_idx = int(chunk_idx)
+                chunk_data = base64.b64decode(chunk_data_b64)
+                if filename not in self.received_chunks:
+                    self.received_chunks[filename] = {}
+                self.received_chunks[filename][chunk_idx] = chunk_data
+                self.signal_handler.message_received.emit(f"📥 Received missing chunk {chunk_idx} of {filename} from {ip}")
+                if filename in self.expected_chunks and len(self.received_chunks[filename]) == self.expected_chunks[filename]:
+                    self.assemble_file(filename, ip)
+            else:
+                self.signal_handler.message_received.emit(f" Message from {ip}: {message}")
+        except Exception as e:
+            self.signal_handler.message_received.emit(f"❌ Error handling peer message: {e}")
 
     def handle_file_chunk(self, chunk_info, sender_address):
         try:
+            required_keys = ['file_name', 'chunk_index', 'total_chunks', 'data']
+            for key in required_keys:
+                if key not in chunk_info:
+                    self.signal_handler.message_received.emit(f"❌ Missing key in chunk_info: {key}")
+                    return
+
             file_name = chunk_info['file_name']
             index = chunk_info['chunk_index']
             total = chunk_info['total_chunks']
@@ -222,7 +227,10 @@ class StudentWindow(QMainWindow):
         threading.Thread(target=self.network.listen_for_peers, daemon=True).start()
         threading.Thread(target=self.network.listen_for_files, daemon=True).start()
         threading.Thread(target=self.network.listen_for_messages, daemon=True).start()
-        threading.Thread(target=self.network.listen_for_acks, daemon=True).start()
+        try:
+            threading.Thread(target=self.network.listen_for_acks, daemon=True).start()
+        except Exception as e:
+            self.signal_handler.message_received.emit(f"⚠️ Could not start ACK listener: {e}")
 
     def join_session(self):
         self.network.discover_peers()
