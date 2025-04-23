@@ -27,6 +27,41 @@ class PeerNetwork:
             data = f.read()
         chunks = [data[i:i+self.chunk_size] for i in range(0, len(data), self.chunk_size)]
         return chunks
+    
+
+    def listen_for_messages(self):
+        print(f" Listening for messages on TCP port {self.message_port}...")
+        msg_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        msg_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        try:
+            msg_socket.bind(('', self.message_port))
+            msg_socket.listen(5)
+
+            while True:
+                try:
+                    conn, addr = msg_socket.accept()
+                    thread = threading.Thread(target=self._handle_message, args=(conn, addr))
+                    thread.daemon = True
+                    thread.start()
+                except Exception as e:
+                    print(f" Error accepting message connection: {e}")
+        except Exception as e:
+            print(f" Error setting up message listener: {e}")
+
+    def _handle_message(self, conn, addr):
+        try:
+            data = conn.recv(4096)
+            if data:
+                message = data.decode('utf-8')
+                print(f" Received message from {addr[0]}: {message}")
+                if self.on_message_received:
+                    self.on_message_received(message, addr)
+        except Exception as e:
+            print(f" Error handling message: {e}")
+        finally:
+            conn.close()
+
 
     def send_file_chunks(self, file_path, peer_ip):
         file_name = os.path.basename(file_path)
